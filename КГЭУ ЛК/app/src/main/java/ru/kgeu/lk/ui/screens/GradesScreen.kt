@@ -32,6 +32,7 @@ import ru.kgeu.lk.data.model.GradePoint
 import ru.kgeu.lk.data.model.SemesterRating
 import ru.kgeu.lk.data.model.UiState
 import ru.kgeu.lk.ui.util.displayName
+import ru.kgeu.lk.ui.util.finalGrade
 import ru.kgeu.lk.ui.util.ktRating
 import ru.kgeu.lk.ui.util.semesterTitle
 
@@ -111,7 +112,7 @@ private fun DisciplineCard(
             .fillMaxWidth()
             .clickable { onOpen(discipline) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -137,11 +138,32 @@ private fun DisciplineCard(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
+            discipline.finalGrade()?.takeIf { it.isNotBlank() }?.let { grade ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Итоги",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = grade,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
+            }
             discipline.teacher?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 4.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
                 )
             }
         }

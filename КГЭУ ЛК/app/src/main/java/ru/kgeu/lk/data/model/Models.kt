@@ -144,6 +144,7 @@ data class DisciplineGrade(
     val closed: Boolean? = null,
     val type: String? = null,
     val ktRatingKt: String? = null,
+    val summary: String? = null,
 )
 
 data class GradePoint(

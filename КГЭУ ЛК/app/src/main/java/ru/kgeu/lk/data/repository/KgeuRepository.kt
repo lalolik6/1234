@@ -201,10 +201,13 @@ class KgeuRepository(
 
     private suspend fun DisciplineGrade.withKtRating(): DisciplineGrade {
         val ratingId = ratingID ?: return this
-        val rating = runCatching {
-            fetchVedHtml(ratingId)?.let { VedParser.parseRatingKt(it) }
-        }.getOrNull()
-        return if (rating.isNullOrBlank()) this else copy(ktRatingKt = rating)
+        val full = runCatching {
+            fetchVedHtml(ratingId)?.let { VedParser.parseFull(it) }
+        }.getOrNull() ?: return this
+        return copy(
+            ktRatingKt = full.ratingKt?.takeIf { it.isNotBlank() } ?: ktRatingKt,
+            summary = full.summary?.takeIf { it.isNotBlank() } ?: summary,
+        )
     }
 
     suspend fun loadGradeDetails(discipline: DisciplineGrade): List<GradePoint> = withContext(Dispatchers.IO) {
