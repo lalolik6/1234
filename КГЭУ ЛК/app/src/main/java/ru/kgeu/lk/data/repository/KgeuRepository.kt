@@ -101,10 +101,9 @@ class KgeuRepository(
             val lessonStart = lesson.startDateTime.orEmpty()
             lessonDate.startsWith(targetIso) ||
                 lessonDate.startsWith(targetDisplay) ||
-                lessonStart.startsWith(targetIso) ||
-                (lessonDate.isBlank() && lessonStart.isBlank())
+                lessonStart.startsWith(targetIso)
         }
-        val lessons = (if (filteredByDate.isNotEmpty()) filteredByDate else parsedLessons)
+        val lessons = filteredByDate
             .filter { lesson -> !lesson.cancelled.orFalse() }
             .filter { lesson -> lesson.hasVisibleContent() }
             .sortedBy { it.startDateTime ?: it.start ?: it.date.orEmpty() }

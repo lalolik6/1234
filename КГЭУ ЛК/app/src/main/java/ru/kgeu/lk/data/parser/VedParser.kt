@@ -12,13 +12,24 @@ object VedParser {
      */
     private val ktPartRegex = Regex("итог[а-я]*\\s*(?:по\\s*)?кт\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
+    /** Отдельное слово «Итоги» в заголовке (не «Итоговый»/«Итоговая»). */
+    private val summaryRegex = Regex("(?<![а-яёa-z])итоги(?![а-яёa-z])", RegexOption.IGNORE_CASE)
+
     data class VedResult(
         val ktPoints: List<GradePoint>,
         val ratingKt: String?,
+        val summary: String?,
     )
 
-    /** Только строки «Итоги по КТ 1‑3» (экран предмета). */
-    fun parse(html: String): List<GradePoint> = parseFull(html).ktPoints
+    /** Строки «Итоги по КТ 1‑3» + итоговая оценка («Итоги») для экрана предмета. */
+    fun parse(html: String): List<GradePoint> {
+        val result = parseFull(html)
+        val points = result.ktPoints.toMutableList()
+        result.summary?.takeIf { it.isNotBlank() }?.let {
+            points.add(GradePoint("Итоги", it))
+        }
+        return points
+    }
 
     /** Балл из столбца «Итоговый рейтинг по КТ» (для карточки предмета). */
     fun parseRatingKt(html: String): String? = parseFull(html).ratingKt
@@ -30,7 +41,7 @@ object VedParser {
         val dataRow = grid?.select("tr[id*=DXDataRow]")?.firstOrNull()
 
         if (grid == null || headerRows.isEmpty() || dataRow == null) {
-            return VedResult(ktFallback(doc), null)
+            return VedResult(ktFallback(doc), null, null)
         }
 
         val values = directCells(dataRow).map { it.text().trim() }
@@ -39,6 +50,7 @@ object VedParser {
         val ktPoints = sortedMapOf<Int, GradePoint>()
         var ratingKt: String? = null
         var ratingScore = Int.MIN_VALUE
+        var summary: String? = null
 
         for ((column, headers) in columnHeaders) {
             if (column >= values.size) continue
@@ -60,13 +72,18 @@ object VedParser {
                     ratingScore = score
                     ratingKt = value
                 }
+                continue
+            }
+
+            if (summary == null && value.isNotBlank() && summaryRegex.containsMatchIn(bottom)) {
+                summary = value
             }
         }
 
         if (ktPoints.isEmpty()) {
-            return VedResult(ktFallback(doc), ratingKt)
+            return VedResult(ktFallback(doc), ratingKt, summary)
         }
-        return VedResult(ktPoints.values.toList(), ratingKt)
+        return VedResult(ktPoints.values.toList(), ratingKt, summary)
     }
 
     /** Столбец «Итоговый рейтинг по КТ» (но не сами «Итоги по КТ N»). */
