@@ -75,6 +75,8 @@ data class CurrentUserRasp(
 @Serializable
 data class ScheduleInfo(
     val curNumNed: Int? = null,
+    val selectedNumNed: Int? = null,
+    val curWeekNumber: Int? = null,
     val curSem: Int? = null,
     val group: ScheduleGroup? = null,
     val typesWeek: List<WeekType>? = null,

@@ -16,6 +16,8 @@ object ScheduleJsonParser {
         val groupObj = info.obj("group")
         return ScheduleInfo(
             curNumNed = info.int("curNumNed", "CurNumNed"),
+            selectedNumNed = info.int("selectedNumNed", "SelectedNumNed"),
+            curWeekNumber = info.int("curWeekNumber", "CurWeekNumber"),
             curSem = info.int("curSem", "CurSem"),
             group = groupObj?.let {
                 ScheduleGroup(

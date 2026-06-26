@@ -108,6 +108,7 @@ fun MainScreen(viewModel: AppViewModel) {
                 onPreviousDay = { viewModel.shiftScheduleDays(-1) },
                 onNextDay = { viewModel.shiftScheduleDays(1) },
                 onRefresh = { viewModel.loadSchedule(selectedDate) },
+                onDateSelected = { viewModel.loadSchedule(it) },
             )
 
             else -> GradesScreen(

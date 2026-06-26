@@ -114,8 +114,9 @@ class KgeuRepository(
             groupName = info?.group?.name,
             academicYear = year,
             weekType = info?.typesWeek
-                ?.firstOrNull { it.typeWeekID == info.curNumNed }
-                ?.shortName,
+                ?.firstOrNull { it.typeWeekID == (info.selectedNumNed ?: info.curNumNed) }
+                ?.name,
+            weekNumber = info?.curWeekNumber,
             lessons = lessons,
         )
     }
@@ -311,5 +312,6 @@ data class ScheduleResult(
     val groupName: String?,
     val academicYear: String,
     val weekType: String?,
+    val weekNumber: Int?,
     val lessons: List<ScheduleLesson>,
 )
