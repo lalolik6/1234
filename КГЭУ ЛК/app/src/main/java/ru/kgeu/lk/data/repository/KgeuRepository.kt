@@ -16,6 +16,7 @@ import ru.kgeu.lk.data.model.SessionState
 import ru.kgeu.lk.data.model.UserProfile
 import ru.kgeu.lk.data.parser.GradesJsonParser
 import ru.kgeu.lk.data.parser.ScheduleJsonParser
+import ru.kgeu.lk.data.parser.VedListParser
 import ru.kgeu.lk.data.parser.VedParser
 import ru.kgeu.lk.data.storage.SessionStorage
 import java.time.LocalDate
@@ -133,10 +134,14 @@ class KgeuRepository(
             .filter { it.disciplines.isNotEmpty() }
             .sortedByDescending { it.year + (it.sem ?: 0).toString() }
 
+        // API `IntermediatePerfomance` возвращает только закрытые предметы.
+        // Добавляем недостающие (в т.ч. незакрытые) из списка ведомостей Ved/.
+        val mergedSemesters = mergeWithVedList(semesters)
+
         // Подтягиваем «Итоговый рейтинг по КТ» из ведомости каждого предмета,
         // чтобы показывать балл на карточке без захода в предмет.
         coroutineScope {
-            semesters.map { semester ->
+            mergedSemesters.map { semester ->
                 async {
                     val disciplines = semester.disciplines.map { discipline ->
                         async { discipline.withKtRating() }
@@ -144,6 +149,53 @@ class KgeuRepository(
                     semester.copy(disciplines = disciplines)
                 }
             }.awaitAll()
+        }
+    }
+
+    /**
+     * Дополняет список семестров предметами из страницы Ved/ (там есть все
+     * предметы текущего семестра, в т.ч. незакрытые). Предметы сопоставляются
+     * по ratingID; недостающие добавляются в семестр с наибольшим пересечением.
+     */
+    private suspend fun mergeWithVedList(semesters: List<SemesterRating>): List<SemesterRating> {
+        val vedItems = runCatching {
+            fetchVedListHtml()?.let { VedListParser.parse(it) }
+        }.getOrNull().orEmpty()
+        if (vedItems.isEmpty()) return semesters
+
+        val knownIds = semesters.flatMap { it.disciplines.mapNotNull { d -> d.ratingID } }.toSet()
+        val missing = vedItems.filter { it.ratingID !in knownIds }
+        if (missing.isEmpty()) return semesters
+
+        val newDisciplines = missing.map { item ->
+            DisciplineGrade(
+                name = item.name,
+                controlForm = item.controlForm,
+                ratingID = item.ratingID,
+                closed = item.closed,
+            )
+        }
+
+        // Семестр, к которому относится список Ved/ — тот, где больше всего
+        // совпадений по ratingID с уже известными предметами.
+        val vedIds = vedItems.map { it.ratingID }.toSet()
+        val targetIndex = semesters.indices.maxByOrNull { index ->
+            semesters[index].disciplines.count { it.ratingID in vedIds }
+        }?.takeIf { index ->
+            semesters[index].disciplines.any { it.ratingID in vedIds }
+        }
+
+        if (targetIndex == null) {
+            // Не нашли подходящий семестр — показываем список как отдельный семестр.
+            return semesters + SemesterRating(disciplines = newDisciplines)
+        }
+
+        return semesters.mapIndexed { index, semester ->
+            if (index == targetIndex) {
+                semester.copy(disciplines = semester.disciplines + newDisciplines)
+            } else {
+                semester
+            }
         }
     }
 
@@ -184,6 +236,19 @@ class KgeuRepository(
             if (!html.isNullOrBlank()) return@withContext html
         }
         null
+    }
+
+    private suspend fun fetchVedListHtml(): String? = withContext(Dispatchers.IO) {
+        val token = sessionStorage.getToken() ?: return@withContext null
+        val request = Request.Builder()
+            .url("https://kabinet.kgeu.ru/Ved/")
+            .header("Authorization", "Bearer $token")
+            .build()
+        runCatching {
+            apiClient.httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) response.body?.string() else null
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
     fun logout() {
