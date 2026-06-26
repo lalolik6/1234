@@ -6,4 +6,5 @@ fun DisciplineGrade.displayName(): String =
     name?.takeIf { it.isNotBlank() } ?: "Предмет №${ratingID ?: "?"}"
 
 fun DisciplineGrade.ktRating(): String? =
-    avg?.takeIf { it.isNotBlank() }
+    ktRatingKt?.takeIf { it.isNotBlank() }
+        ?: avg?.takeIf { it.isNotBlank() }

@@ -1,6 +1,7 @@
 package ru.kgeu.lk.data.parser
 
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import ru.kgeu.lk.data.model.GradePoint
 
@@ -11,64 +12,111 @@ object VedParser {
      */
     private val ktPartRegex = Regex("итог[а-я]*\\s*(?:по\\s*)?кт\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
-    fun parse(html: String): List<GradePoint> {
+    data class VedResult(
+        val ktPoints: List<GradePoint>,
+        val ratingKt: String?,
+    )
+
+    /** Только строки «Итоги по КТ 1‑3» (экран предмета). */
+    fun parse(html: String): List<GradePoint> = parseFull(html).ktPoints
+
+    /** Балл из столбца «Итоговый рейтинг по КТ» (для карточки предмета). */
+    fun parseRatingKt(html: String): String? = parseFull(html).ratingKt
+
+    fun parseFull(html: String): VedResult {
         val doc = Jsoup.parse(html)
-        val table = doc.select("table").maxByOrNull { it.select("tr").size } ?: return ktFallback(doc)
-        val rows = table.select("tr")
-        if (rows.isEmpty()) return ktFallback(doc)
+        val grid = selectMarksGrid(doc)
+        val headerRows = grid?.select("tr[id*=DXHeadersRow]").orEmpty()
+        val dataRow = grid?.select("tr[id*=DXDataRow]")?.firstOrNull()
 
-        val headerRows = rows.take(4)
-        val dataRow = rows.drop(headerRows.size).firstOrNull { row ->
-            row.select("td").size >= 3
-        } ?: rows.lastOrNull()
-
-        if (dataRow == null) return ktFallback(doc)
-
-        val columnTitles = buildColumnTitles(headerRows)
-        val cells = dataRow.select("td, th").map { it.text().trim() }
-        val points = sortedMapOf<Int, GradePoint>()
-
-        columnTitles.forEachIndexed { index, title ->
-            if (index >= cells.size) return@forEachIndexed
-            val value = cells[index]
-            if (value.isBlank()) return@forEachIndexed
-            val ktNumber = ktNumberOf(title) ?: return@forEachIndexed
-            points.putIfAbsent(ktNumber, GradePoint(title = "Итоги по КТ $ktNumber", value = value))
+        if (grid == null || headerRows.isEmpty() || dataRow == null) {
+            return VedResult(ktFallback(doc), null)
         }
 
-        if (points.isEmpty()) return ktFallback(doc)
+        val values = directCells(dataRow).map { it.text().trim() }
+        val columnHeaders = buildColumnHeaders(headerRows)
 
-        return points.values.toList()
-    }
+        val ktPoints = sortedMapOf<Int, GradePoint>()
+        var ratingKt: String? = null
+        var ratingScore = Int.MIN_VALUE
 
-    private fun buildColumnTitles(headerRows: List<Element>): List<String> {
-        val maxColumns = headerRows.maxOfOrNull { it.select("td, th").size } ?: 0
-        val titles = MutableList(maxColumns) { "" }
+        for ((column, headers) in columnHeaders) {
+            if (column >= values.size) continue
+            val value = values[column]
+            val bottom = headers.lastOrNull { it.isNotBlank() }.orEmpty()
+            val combined = headers.filter { it.isNotBlank() }.joinToString(" ")
 
-        headerRows.forEach { row ->
-            var column = 0
-            row.select("td, th").forEach { cell ->
-                while (column < titles.size && titles[column].isNotBlank()) {
-                    column++
+            val ktNumber = ktPartRegex.find(bottom)?.groupValues?.get(1)?.toIntOrNull()
+            if (ktNumber != null && ktNumber in 1..20) {
+                if (value.isNotBlank()) {
+                    ktPoints.putIfAbsent(ktNumber, GradePoint("Итоги по КТ $ktNumber", value))
                 }
-                if (column >= titles.size) return@forEach
-                val text = cell.text().trim()
-                val colspan = cell.attr("colspan").toIntOrNull() ?: 1
-                repeat(colspan) { offset ->
-                    val target = column + offset
-                    if (target < titles.size && text.isNotBlank()) {
-                        titles[target] = if (titles[target].isBlank()) {
-                            text
-                        } else {
-                            "${titles[target]} / $text"
-                        }
-                    }
+                continue
+            }
+
+            if (isRatingHeader(combined) && value.isNotBlank()) {
+                val score = value.replace(',', '.').toFloatOrNull()?.toInt() ?: 0
+                if (score >= ratingScore) {
+                    ratingScore = score
+                    ratingKt = value
                 }
-                column += colspan
             }
         }
 
-        return titles
+        if (ktPoints.isEmpty()) {
+            return VedResult(ktFallback(doc), ratingKt)
+        }
+        return VedResult(ktPoints.values.toList(), ratingKt)
+    }
+
+    /** Столбец «Итоговый рейтинг по КТ» (но не сами «Итоги по КТ N»). */
+    private fun isRatingHeader(header: String): Boolean =
+        header.contains("рейтинг", ignoreCase = true) &&
+            header.contains("кт", ignoreCase = true) &&
+            ktPartRegex.find(header) == null
+
+    /** Выбираем основную таблицу с баллами DevExpress (с наибольшим числом столбцов). */
+    private fun selectMarksGrid(doc: Document): Element? {
+        val grids = doc.select("table[id*=DXMainTable]")
+        if (grids.isEmpty()) return null
+        return grids.maxByOrNull { grid ->
+            grid.select("tr[id*=DXDataRow]").firstOrNull()
+                ?.let { directCells(it).size } ?: 0
+        }
+    }
+
+    private fun directCells(row: Element): List<Element> =
+        row.children().filter { it.tagName() == "td" || it.tagName() == "th" }
+
+    /**
+     * Разбирает заголовок таблицы DevExpress (несколько строк, colspan/rowspan)
+     * в карту: индекс столбца → список текстов заголовка сверху вниз.
+     */
+    private fun buildColumnHeaders(headerRows: List<Element>): Map<Int, List<String>> {
+        val result = sortedMapOf<Int, MutableList<String>>()
+        // Активные rowspan-ы: столбец → (текст, сколько строк ещё занимает).
+        val pending = HashMap<Int, Pair<String, Int>>()
+
+        for (row in headerRows) {
+            var column = 0
+            for (cell in directCells(row)) {
+                while ((pending[column]?.second ?: 0) > 0) {
+                    val (text, remaining) = pending[column]!!
+                    result.getOrPut(column) { mutableListOf() }.add(text)
+                    pending[column] = text to (remaining - 1)
+                    column++
+                }
+                val text = cell.text().trim()
+                val colspan = cell.attr("colspan").toIntOrNull()?.coerceAtLeast(1) ?: 1
+                val rowspan = cell.attr("rowspan").toIntOrNull()?.coerceAtLeast(1) ?: 1
+                repeat(colspan) {
+                    result.getOrPut(column) { mutableListOf() }.add(text)
+                    if (rowspan > 1) pending[column] = text to (rowspan - 1)
+                    column++
+                }
+            }
+        }
+        return result
     }
 
     /** Возвращает номер КТ (1, 2, 3…), если заголовок относится к итогам по КТ. */
@@ -79,7 +127,7 @@ object VedParser {
      * Запасной разбор: ищем по всей таблице ячейки с заголовком «Итоги по КТ N»
      * и берём соседнее значение.
      */
-    private fun ktFallback(doc: org.jsoup.nodes.Document): List<GradePoint> {
+    private fun ktFallback(doc: Document): List<GradePoint> {
         val points = sortedMapOf<Int, GradePoint>()
         doc.select("table tr").forEach { row ->
             val cells = row.select("td, th").map { it.text().trim() }

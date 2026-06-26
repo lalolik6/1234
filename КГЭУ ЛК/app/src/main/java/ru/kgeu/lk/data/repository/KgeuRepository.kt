@@ -1,6 +1,9 @@
 package ru.kgeu.lk.data.repository
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import ru.kgeu.lk.data.api.KgeuApiClient
@@ -118,7 +121,7 @@ class KgeuRepository(
     }
 
     suspend fun loadGrades(): List<SemesterRating> = withContext(Dispatchers.IO) {
-        runCatching {
+        val semesters = runCatching {
             val envelope = api.grades(onlyDebts = false)
             val data = envelope.data ?: return@runCatching emptyList()
             GradesJsonParser.parseRating(data)
@@ -130,39 +133,58 @@ class KgeuRepository(
             }
             .filter { it.disciplines.isNotEmpty() }
             .sortedByDescending { it.year + (it.sem ?: 0).toString() }
+
+        // Подтягиваем «Итоговый рейтинг по КТ» из ведомости каждого предмета,
+        // чтобы показывать балл на карточке без захода в предмет.
+        coroutineScope {
+            semesters.map { semester ->
+                async {
+                    val disciplines = semester.disciplines.map { discipline ->
+                        async { discipline.withKtRating() }
+                    }.awaitAll()
+                    semester.copy(disciplines = disciplines)
+                }
+            }.awaitAll()
+        }
+    }
+
+    private suspend fun DisciplineGrade.withKtRating(): DisciplineGrade {
+        val ratingId = ratingID ?: return this
+        val rating = runCatching {
+            fetchVedHtml(ratingId)?.let { VedParser.parseRatingKt(it) }
+        }.getOrNull()
+        return if (rating.isNullOrBlank()) this else copy(ktRatingKt = rating)
     }
 
     suspend fun loadGradeDetails(discipline: DisciplineGrade): List<GradePoint> = withContext(Dispatchers.IO) {
         val ratingId = discipline.ratingID ?: return@withContext emptyList()
-        val token = sessionStorage.getToken() ?: return@withContext emptyList()
+        val html = fetchVedHtml(ratingId)
+            ?: throw IllegalStateException("Не удалось загрузить ведомость")
+        val points = VedParser.parse(html)
+        if (points.isEmpty()) {
+            throw IllegalStateException("Детальные баллы не найдены в ведомости")
+        }
+        points
+    }
 
+    private suspend fun fetchVedHtml(ratingId: Int): String? = withContext(Dispatchers.IO) {
+        val token = sessionStorage.getToken() ?: return@withContext null
         val urls = listOf(
             "https://kabinet.kgeu.ru/Ved/Ved.aspx?id=$ratingId",
-            "https://edu.donstu.ru/Ved/Ved.aspx?id=$ratingId",
         )
-
-        var lastError: Exception? = null
         for (url in urls) {
             val request = Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer $token")
                 .build()
-
-            runCatching {
+            val html = runCatching {
                 apiClient.httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IllegalStateException("Не удалось загрузить ведомость (${response.code})")
-                    }
-                    val html = response.body?.string().orEmpty()
-                    val points = VedParser.parse(html)
-                    if (points.isNotEmpty()) return@withContext points
-                    throw IllegalStateException("Пустая ведомость")
+                    if (response.isSuccessful) response.body?.string() else null
                 }
-            }.onSuccess { return@withContext it }
-                .onFailure { lastError = it as? Exception ?: Exception(it) }
+            }.getOrNull()
+            if (!html.isNullOrBlank()) return@withContext html
         }
-
-        throw lastError ?: IllegalStateException("Не удалось загрузить ведомость")
+        null
     }
 
     fun logout() {
