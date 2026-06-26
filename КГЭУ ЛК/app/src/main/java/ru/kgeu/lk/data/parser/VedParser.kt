@@ -5,61 +5,40 @@ import org.jsoup.nodes.Element
 import ru.kgeu.lk.data.model.GradePoint
 
 object VedParser {
-    private val ktTotalHeaders = listOf(
-        "Итоговый рейтинг по КТ",
-        "Итоговый рейтинг",
-        "рейтинг по КТ",
-    )
-    private val ktPartHeaders = listOf(
-        "Итоги по КТ 1",
-        "Итоги по КТ 2",
-        "Итоги по КТ 3",
-        "Итоги по КТ 4",
-    )
+    /**
+     * Матчит заголовки столбцов вида «Итоги по КТ 1», «Итоги по КТ 2», «Итоги по КТ 3».
+     * На экране предмета должны остаться только эти строки и баллы за них.
+     */
+    private val ktPartRegex = Regex("итог[а-я]*\\s*(?:по\\s*)?кт\\s*(\\d+)", RegexOption.IGNORE_CASE)
 
     fun parse(html: String): List<GradePoint> {
         val doc = Jsoup.parse(html)
-        val table = doc.select("table").maxByOrNull { it.select("tr").size } ?: return emptyList()
+        val table = doc.select("table").maxByOrNull { it.select("tr").size } ?: return ktFallback(doc)
         val rows = table.select("tr")
-        if (rows.isEmpty()) return emptyList()
+        if (rows.isEmpty()) return ktFallback(doc)
 
         val headerRows = rows.take(4)
         val dataRow = rows.drop(headerRows.size).firstOrNull { row ->
             row.select("td").size >= 3
         } ?: rows.lastOrNull()
 
-        if (dataRow == null) return fallbackParse(doc)
+        if (dataRow == null) return ktFallback(doc)
 
         val columnTitles = buildColumnTitles(headerRows)
         val cells = dataRow.select("td, th").map { it.text().trim() }
-        val points = linkedMapOf<String, String>()
+        val points = sortedMapOf<Int, GradePoint>()
 
         columnTitles.forEachIndexed { index, title ->
             if (index >= cells.size) return@forEachIndexed
             val value = cells[index]
             if (value.isBlank()) return@forEachIndexed
-            if (isImportantHeader(title)) {
-                points[normalizeTitle(title)] = value
-            }
+            val ktNumber = ktNumberOf(title) ?: return@forEachIndexed
+            points.putIfAbsent(ktNumber, GradePoint(title = "Итоги по КТ $ktNumber", value = value))
         }
 
-        ktTotalHeaders.firstNotNullOfOrNull { header ->
-            findColumnValue(columnTitles, cells, header)?.let { value ->
-                points.putIfAbsent("Итоговый рейтинг по КТ", value)
-            }
-        }
+        if (points.isEmpty()) return ktFallback(doc)
 
-        ktPartHeaders.forEach { header ->
-            findColumnValue(columnTitles, cells, header)?.let { value ->
-                points.putIfAbsent(normalizeTitle(header), value)
-            }
-        }
-
-        if (points.isEmpty()) {
-            return fallbackParse(doc)
-        }
-
-        return points.map { (title, value) -> GradePoint(title = title, value = value) }
+        return points.values.toList()
     }
 
     private fun buildColumnTitles(headerRows: List<Element>): List<String> {
@@ -92,37 +71,24 @@ object VedParser {
         return titles
     }
 
-    private fun findColumnValue(
-        titles: List<String>,
-        cells: List<String>,
-        needle: String,
-    ): String? {
-        val index = titles.indexOfFirst { title ->
-            title.contains(needle, ignoreCase = true) ||
-                needle.contains(title, ignoreCase = true)
-        }
-        if (index < 0 || index >= cells.size) return null
-        return cells[index].takeIf { it.isNotBlank() }
-    }
+    /** Возвращает номер КТ (1, 2, 3…), если заголовок относится к итогам по КТ. */
+    private fun ktNumberOf(title: String): Int? =
+        ktPartRegex.find(title)?.groupValues?.get(1)?.toIntOrNull()
 
-    private fun isImportantHeader(title: String): Boolean {
-        val normalized = title.lowercase()
-        return ktTotalHeaders.any { normalized.contains(it.lowercase()) } ||
-            ktPartHeaders.any { normalized.contains(it.lowercase()) } ||
-            normalized.contains("итог")
-    }
-
-    private fun normalizeTitle(title: String): String =
-        title.replace(Regex("\\s+"), " ").trim()
-
-    private fun fallbackParse(doc: org.jsoup.nodes.Document): List<GradePoint> {
-        val points = mutableListOf<GradePoint>()
+    /**
+     * Запасной разбор: ищем по всей таблице ячейки с заголовком «Итоги по КТ N»
+     * и берём соседнее значение.
+     */
+    private fun ktFallback(doc: org.jsoup.nodes.Document): List<GradePoint> {
+        val points = sortedMapOf<Int, GradePoint>()
         doc.select("table tr").forEach { row ->
-            val cells = row.select("td, th").map { it.text().trim() }.filter { it.isNotBlank() }
-            if (cells.size >= 2) {
-                points += GradePoint(title = cells[0], value = cells.drop(1).joinToString(" "))
+            val cells = row.select("td, th").map { it.text().trim() }
+            cells.forEachIndexed { index, cell ->
+                val ktNumber = ktNumberOf(cell) ?: return@forEachIndexed
+                val value = cells.drop(index + 1).firstOrNull { it.isNotBlank() } ?: return@forEachIndexed
+                points.putIfAbsent(ktNumber, GradePoint(title = "Итоги по КТ $ktNumber", value = value))
             }
         }
-        return points.distinctBy { it.title + it.value }
+        return points.values.toList()
     }
 }

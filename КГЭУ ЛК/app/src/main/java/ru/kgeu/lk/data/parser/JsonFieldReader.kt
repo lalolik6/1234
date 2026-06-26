@@ -13,7 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 internal fun JsonObject.text(vararg keys: String): String? {
     for (key in keys) {
-        val value = this[key]?.primitiveText()?.takeIf { it.isNotBlank() } ?: continue
+        val value = findIgnoreCase(key)?.primitiveText()?.takeIf { it.isNotBlank() } ?: continue
         return value
     }
     return null
@@ -21,7 +21,7 @@ internal fun JsonObject.text(vararg keys: String): String? {
 
 internal fun JsonObject.int(vararg keys: String): Int? {
     for (key in keys) {
-        val element = this[key] ?: continue
+        val element = findIgnoreCase(key) ?: continue
         element.jsonPrimitive.intOrNull?.let { return it }
         element.jsonPrimitive.contentOrNull?.toIntOrNull()?.let { return it }
     }
@@ -30,7 +30,7 @@ internal fun JsonObject.int(vararg keys: String): Int? {
 
 internal fun JsonObject.bool(vararg keys: String): Boolean? {
     for (key in keys) {
-        when (val element = this[key]) {
+        when (val element = findIgnoreCase(key)) {
             null, is JsonNull -> continue
             is JsonPrimitive -> {
                 when (element.content.lowercase()) {
@@ -49,14 +49,27 @@ internal fun JsonElement.primitiveText(): String? =
 
 internal fun JsonObject.array(vararg keys: String): JsonArray? {
     for (key in keys) {
-        this[key]?.jsonArray?.let { return it }
+        findIgnoreCase(key)?.jsonArray?.let { return it }
     }
     return null
 }
 
 internal fun JsonObject.obj(vararg keys: String): JsonObject? {
     for (key in keys) {
-        this[key]?.jsonObject?.let { return it }
+        findIgnoreCase(key)?.jsonObject?.let { return it }
+    }
+    return null
+}
+
+/**
+ * Looks up a key case-insensitively. The kabinet.kgeu.ru API returns Cyrillic
+ * field names with a lowercase first letter (e.g. "дата", "дисциплина"), so an
+ * exact-case lookup of "Дата"/"Дисциплина" would always miss.
+ */
+private fun JsonObject.findIgnoreCase(key: String): JsonElement? {
+    this[key]?.let { return it }
+    for ((existingKey, value) in this) {
+        if (existingKey.equals(key, ignoreCase = true)) return value
     }
     return null
 }
