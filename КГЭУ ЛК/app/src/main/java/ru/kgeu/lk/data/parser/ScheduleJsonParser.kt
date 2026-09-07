@@ -16,6 +16,8 @@ object ScheduleJsonParser {
         val groupObj = info.obj("group")
         return ScheduleInfo(
             curNumNed = info.int("curNumNed", "CurNumNed"),
+            selectedNumNed = info.int("selectedNumNed", "SelectedNumNed"),
+            curWeekNumber = info.int("curWeekNumber", "CurWeekNumber"),
             curSem = info.int("curSem", "CurSem"),
             group = groupObj?.let {
                 ScheduleGroup(
@@ -42,8 +44,8 @@ object ScheduleJsonParser {
             room = obj.text("Аудитория", "room", "Room", "aud", "Aud"),
             start = obj.text("Начало", "start", "Start", "timeStart"),
             end = obj.text("Конец", "end", "End", "timeEnd"),
-            startDateTime = obj.text("НачалоЗанятия", "startDateTime", "StartDateTime"),
-            endDateTime = obj.text("ОкончаниеЗанятия", "endDateTime", "EndDateTime"),
+            startDateTime = obj.text("ДатаНачала", "НачалоЗанятия", "startDateTime", "StartDateTime"),
+            endDateTime = obj.text("ДатаОкончания", "ОкончаниеЗанятия", "endDateTime", "EndDateTime"),
             lessonNumber = obj.int("НомерЗанятия", "lessonNumber", "LessonNumber", "number"),
             cancelled = obj.bool("ОтмененоЗанятие", "cancelled", "Cancelled", "isCancelled"),
             color = obj.text("Цвет", "color", "Color"),

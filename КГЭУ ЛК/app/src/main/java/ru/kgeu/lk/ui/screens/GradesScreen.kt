@@ -32,6 +32,7 @@ import ru.kgeu.lk.data.model.GradePoint
 import ru.kgeu.lk.data.model.SemesterRating
 import ru.kgeu.lk.data.model.UiState
 import ru.kgeu.lk.ui.util.displayName
+import ru.kgeu.lk.ui.util.finalGrade
 import ru.kgeu.lk.ui.util.ktRating
 import ru.kgeu.lk.ui.util.semesterTitle
 
@@ -111,7 +112,7 @@ private fun DisciplineCard(
             .fillMaxWidth()
             .clickable { onOpen(discipline) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -119,36 +120,50 @@ private fun DisciplineCard(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            discipline.ktRating()?.let {
-                Text(
-                    text = "Рейтинг КТ: $it",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
                     text = discipline.controlForm ?: discipline.type.orEmpty(),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
-                    text = if (discipline.closed == true) "Закрыта" else "Открыта",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
+                    text = "Итоговый рейтинг КТ: ${discipline.ktRating() ?: "—"}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
                 )
+            }
+            discipline.finalGrade()?.takeIf { it.isNotBlank() }?.let { grade ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Итоги",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = grade,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.secondary,
+                    )
+                }
             }
             discipline.teacher?.takeIf { it.isNotBlank() }?.let {
                 Text(
                     text = it,
                     style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 4.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
                 )
             }
         }
@@ -195,23 +210,16 @@ private fun GradeDetailsScreen(
                 }
 
                 else -> {
-                    val points = state.data.orEmpty().sortedBy { point ->
-                        if (point.title.contains("Итоговый рейтинг", ignoreCase = true)) 0 else 1
-                    }
+                    val points = state.data.orEmpty()
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         itemsIndexed(
                             items = points,
                             key = { index, point -> "point-$index-${point.title}" },
                         ) { _, point ->
-                            val isTotal = point.title.contains("Итоговый рейтинг", ignoreCase = true)
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isTotal) {
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.surface
-                                    },
+                                    containerColor = MaterialTheme.colorScheme.surface,
                                 ),
                             ) {
                                 Row(

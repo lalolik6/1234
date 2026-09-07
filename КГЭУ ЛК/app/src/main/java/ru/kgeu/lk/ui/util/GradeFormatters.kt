@@ -6,4 +6,11 @@ fun DisciplineGrade.displayName(): String =
     name?.takeIf { it.isNotBlank() } ?: "Предмет №${ratingID ?: "?"}"
 
 fun DisciplineGrade.ktRating(): String? =
-    avg?.takeIf { it.isNotBlank() }
+    ktRatingKt?.takeIf { it.isNotBlank() }
+        ?: avg?.takeIf { it.isNotBlank() }
+
+/** Итоговая оценка («Итоги»: Отлично/Зачтено/5…) для карточки без захода в предмет. */
+fun DisciplineGrade.finalGrade(): String? =
+    summary?.takeIf { it.isNotBlank() }
+        ?: avg?.takeIf { it.isNotBlank() }
+        ?: mark?.takeIf { it.isNotBlank() }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#243A51</color>
+    <string name="app_name">КГЭУ ЛК</string>
+    <style name="Theme.KgeuLk" parent="android:Theme.Material.Light.NoActionBar"/>
+</resources>

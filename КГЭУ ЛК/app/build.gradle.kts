@@ -13,8 +13,8 @@ android {
         applicationId = "ru.kgeu.lk"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 8
+        versionName = "1.0.7"
     }
 
     buildTypes {

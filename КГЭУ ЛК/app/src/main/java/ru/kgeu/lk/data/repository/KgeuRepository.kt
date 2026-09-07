@@ -1,6 +1,9 @@
 package ru.kgeu.lk.data.repository
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import ru.kgeu.lk.data.api.KgeuApiClient
@@ -13,6 +16,7 @@ import ru.kgeu.lk.data.model.SessionState
 import ru.kgeu.lk.data.model.UserProfile
 import ru.kgeu.lk.data.parser.GradesJsonParser
 import ru.kgeu.lk.data.parser.ScheduleJsonParser
+import ru.kgeu.lk.data.parser.VedListParser
 import ru.kgeu.lk.data.parser.VedParser
 import ru.kgeu.lk.data.storage.SessionStorage
 import java.time.LocalDate
@@ -98,10 +102,9 @@ class KgeuRepository(
             val lessonStart = lesson.startDateTime.orEmpty()
             lessonDate.startsWith(targetIso) ||
                 lessonDate.startsWith(targetDisplay) ||
-                lessonStart.startsWith(targetIso) ||
-                (lessonDate.isBlank() && lessonStart.isBlank())
+                lessonStart.startsWith(targetIso)
         }
-        val lessons = (if (filteredByDate.isNotEmpty()) filteredByDate else parsedLessons)
+        val lessons = filteredByDate
             .filter { lesson -> !lesson.cancelled.orFalse() }
             .filter { lesson -> lesson.hasVisibleContent() }
             .sortedBy { it.startDateTime ?: it.start ?: it.date.orEmpty() }
@@ -111,14 +114,15 @@ class KgeuRepository(
             groupName = info?.group?.name,
             academicYear = year,
             weekType = info?.typesWeek
-                ?.firstOrNull { it.typeWeekID == info.curNumNed }
-                ?.shortName,
+                ?.firstOrNull { it.typeWeekID == (info.selectedNumNed ?: info.curNumNed) }
+                ?.name,
+            weekNumber = info?.curWeekNumber,
             lessons = lessons,
         )
     }
 
     suspend fun loadGrades(): List<SemesterRating> = withContext(Dispatchers.IO) {
-        runCatching {
+        val semesters = runCatching {
             val envelope = api.grades(onlyDebts = false)
             val data = envelope.data ?: return@runCatching emptyList()
             GradesJsonParser.parseRating(data)
@@ -130,39 +134,125 @@ class KgeuRepository(
             }
             .filter { it.disciplines.isNotEmpty() }
             .sortedByDescending { it.year + (it.sem ?: 0).toString() }
+
+        // API `IntermediatePerfomance` возвращает только закрытые предметы.
+        // Добавляем недостающие (в т.ч. незакрытые) из списка ведомостей Ved/.
+        val mergedSemesters = mergeWithVedList(semesters)
+
+        // Подтягиваем «Итоговый рейтинг по КТ» из ведомости каждого предмета,
+        // чтобы показывать балл на карточке без захода в предмет.
+        coroutineScope {
+            mergedSemesters.map { semester ->
+                async {
+                    val disciplines = semester.disciplines.map { discipline ->
+                        async { discipline.withKtRating() }
+                    }.awaitAll()
+                    semester.copy(disciplines = disciplines)
+                }
+            }.awaitAll()
+        }
+    }
+
+    /**
+     * Дополняет список семестров предметами из страницы Ved/ (там есть все
+     * предметы текущего семестра, в т.ч. незакрытые). Предметы сопоставляются
+     * по ratingID; недостающие добавляются в семестр с наибольшим пересечением.
+     */
+    private suspend fun mergeWithVedList(semesters: List<SemesterRating>): List<SemesterRating> {
+        val vedItems = runCatching {
+            fetchVedListHtml()?.let { VedListParser.parse(it) }
+        }.getOrNull().orEmpty()
+        if (vedItems.isEmpty()) return semesters
+
+        val knownIds = semesters.flatMap { it.disciplines.mapNotNull { d -> d.ratingID } }.toSet()
+        val missing = vedItems.filter { it.ratingID !in knownIds }
+        if (missing.isEmpty()) return semesters
+
+        val newDisciplines = missing.map { item ->
+            DisciplineGrade(
+                name = item.name,
+                controlForm = item.controlForm,
+                ratingID = item.ratingID,
+                closed = item.closed,
+            )
+        }
+
+        // Семестр, к которому относится список Ved/ — тот, где больше всего
+        // совпадений по ratingID с уже известными предметами.
+        val vedIds = vedItems.map { it.ratingID }.toSet()
+        val targetIndex = semesters.indices.maxByOrNull { index ->
+            semesters[index].disciplines.count { it.ratingID in vedIds }
+        }?.takeIf { index ->
+            semesters[index].disciplines.any { it.ratingID in vedIds }
+        }
+
+        if (targetIndex == null) {
+            // Не нашли подходящий семестр — показываем список как отдельный семестр.
+            return semesters + SemesterRating(disciplines = newDisciplines)
+        }
+
+        return semesters.mapIndexed { index, semester ->
+            if (index == targetIndex) {
+                semester.copy(disciplines = semester.disciplines + newDisciplines)
+            } else {
+                semester
+            }
+        }
+    }
+
+    private suspend fun DisciplineGrade.withKtRating(): DisciplineGrade {
+        val ratingId = ratingID ?: return this
+        val full = runCatching {
+            fetchVedHtml(ratingId)?.let { VedParser.parseFull(it) }
+        }.getOrNull() ?: return this
+        return copy(
+            ktRatingKt = full.ratingKt?.takeIf { it.isNotBlank() } ?: ktRatingKt,
+            summary = full.summary?.takeIf { it.isNotBlank() } ?: summary,
+        )
     }
 
     suspend fun loadGradeDetails(discipline: DisciplineGrade): List<GradePoint> = withContext(Dispatchers.IO) {
         val ratingId = discipline.ratingID ?: return@withContext emptyList()
-        val token = sessionStorage.getToken() ?: return@withContext emptyList()
+        val html = fetchVedHtml(ratingId)
+            ?: throw IllegalStateException("Не удалось загрузить ведомость")
+        val points = VedParser.parse(html)
+        if (points.isEmpty()) {
+            throw IllegalStateException("Детальные баллы не найдены в ведомости")
+        }
+        points
+    }
 
+    private suspend fun fetchVedHtml(ratingId: Int): String? = withContext(Dispatchers.IO) {
+        val token = sessionStorage.getToken() ?: return@withContext null
         val urls = listOf(
             "https://kabinet.kgeu.ru/Ved/Ved.aspx?id=$ratingId",
-            "https://edu.donstu.ru/Ved/Ved.aspx?id=$ratingId",
         )
-
-        var lastError: Exception? = null
         for (url in urls) {
             val request = Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer $token")
                 .build()
-
-            runCatching {
+            val html = runCatching {
                 apiClient.httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IllegalStateException("Не удалось загрузить ведомость (${response.code})")
-                    }
-                    val html = response.body?.string().orEmpty()
-                    val points = VedParser.parse(html)
-                    if (points.isNotEmpty()) return@withContext points
-                    throw IllegalStateException("Пустая ведомость")
+                    if (response.isSuccessful) response.body?.string() else null
                 }
-            }.onSuccess { return@withContext it }
-                .onFailure { lastError = it as? Exception ?: Exception(it) }
+            }.getOrNull()
+            if (!html.isNullOrBlank()) return@withContext html
         }
+        null
+    }
 
-        throw lastError ?: IllegalStateException("Не удалось загрузить ведомость")
+    private suspend fun fetchVedListHtml(): String? = withContext(Dispatchers.IO) {
+        val token = sessionStorage.getToken() ?: return@withContext null
+        val request = Request.Builder()
+            .url("https://kabinet.kgeu.ru/Ved/")
+            .header("Authorization", "Bearer $token")
+            .build()
+        runCatching {
+            apiClient.httpClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) response.body?.string() else null
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
     fun logout() {
@@ -222,5 +312,6 @@ data class ScheduleResult(
     val groupName: String?,
     val academicYear: String,
     val weekType: String?,
+    val weekNumber: Int?,
     val lessons: List<ScheduleLesson>,
 )
